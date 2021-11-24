@@ -1,4 +1,352 @@
 
 #! /bing/sh
 
+#FUNCTIONS
 
+function user_create(){
+	#LOCAL VARIABLES:
+	local FULL_NAME
+	local USER
+	echo ---------------------------------------------------------------
+	echo user create moode:
+
+	#echo press q to exit 
+	echo --------------------------------------------------------------
+	echo insert the full name of the user:
+	read FULL_NAME
+	echo insert user name
+	read USER
+	sudo useradd -c "$FULL_NAME" $USER
+	echo do you want to add a primary  group to this user? [y / n]
+	while :
+	do
+		read USER_CHOICE
+		if [ $USER_CHOICE = y ]
+		then
+			echo insert the group name
+			local GROUP_NAME
+			read GROUP_NAME
+			sudo usermod -g $GROUP_NAME $USER
+			break		
+		elif [ $USER_CHOICE = n ]
+		then
+			break
+		else
+			echo invalid imput: try again
+			echo insert [ y or n ]
+		fi
+	done
+	
+	echo insert password for user $USER
+
+	sudo passwd $USER
+		
+}
+
+function group_create(){
+	local GROUP_NAME
+	echo insert the name of the group you wish to create
+	read GROUP_NAME
+	sudo groupadd $GROUP_NAME
+	
+	while :
+	do
+		echo do you want to add an user to $GROUP_NAME new group? [ y/n ]
+		read USER_CHOICE
+		if [ $USER_CHOICE = y ]
+		then
+			echo insert the username you want to add at the $GROUP_NAME group
+			echo press enter to exit
+			while :
+			do
+				read USER_CHOICE
+				if [ -z $USER_CHOICE ]
+				then
+					echo finish
+					USER_CHOICE = n
+					break
+				elif [ $(getent passwd | grep $USER_CHOICE | wc -l)  -eq 1 ]
+				then
+					echo esisrte 1
+					break
+				else
+					echo  user $USER_CHOICE dose not exist
+					echo try again
+				fi
+			done
+		elif [ $USER_CHOICE = n ]
+		then
+			break
+		else
+			echo invalid imput: try again
+			echo insert [ y or n ]
+		fi
+	done
+	
+
+}
+
+function control_proces_state(){
+	local PID
+	ps
+	echo insert PID of the process to see thr process state
+	read PID
+	case $(ps gv | cat | grep $PID | cut -d ' ' -f 7) in
+
+		R)
+			echo Running
+			;;
+		T)  
+	 		echo Stopped
+			;;
+		S*)	
+			echo Sleeping
+	 		;;
+		Z)	
+			echo Zombiee
+			;;
+	esac
+}
+
+function show_error_messages(){ 
+	journalctl -p err
+}
+function set_static_route(){
+	local PREFIX
+	local IP
+	local GATEWAY
+	echo you can set a route for a specific network or host
+	read -p 'insert ip: ' IP
+	read -p 'insert prefix es:[8]: ' PREFIX
+	read -p 'insert next_hop: ' GATEWAY
+	sudo  nmcli connection modify enp0s3 ipv4.routes "$IP/$PREFIX $GATEWAY"
+	
+}
+
+function set_ip(){
+	local NET_DEV
+	local IP
+	echo you can set a new ip for a specified network interface
+	echo ATTENTION the change is PERMANENT.
+	echo select the network interface:
+	ip link show | cut -d ':' -f 1-2 | grep ^[0-9]
+	read -p 'Network Interface: ' NET_DEV
+	echo $NET_DEV
+	read -p 'insert ip: ' IP
+	while ! [[ "$IP" =~ ^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$ ]]
+	do
+	        echo $IP is not a valid ip
+		
+	        read -p 'insert ip: ' IP
+	
+	done
+
+	sudo sed -i 's/IPADDR1=.*/IPADDR1='$IP'/' /etc/sysconfig/network-scripts/ifcfg-enp0s3  #e ipaddr1 perche sto utilizzando l' ip primario per la connessione ssh 
+	sudo nmcli connection reload
+	sudo nmcli connection up $NET_DEV
+}
+
+function security_patch(){
+	local PATCH
+	sudo yum updateinfo list security all
+	echo ---------------------------------------------------------------------------------------- 
+	echo do you want to insall some of these pattches? [y/n]
+	read USER_CHOICE
+	if [ $USER_CHOICE = y ]
+	then
+		echo insert one specific advisory to install it 
+		echo " example: RHSA-2014:0159"
+		read -p 'patch: ' PATCH
+		sudo yum update --advisory=$PATCH
+	fi
+}
+
+function install_packages(){
+	local PACKAGE
+	read -p 'insert the name of the package you want to find: ' PACKAGE
+	sudo yum search  $PACKAGE
+	read -p 'insert the name of the package to install: ' PACKAGE
+	sudo yum install $PACKAGE
+	echo --------------------
+}
+
+function manage_firewalld(){
+	systemctl status firewalld
+	echo make a choice:
+	echo '1) start or stop'
+	echo '2) enable or disable'
+	echo '3) exit'
+	
+	read USER_CHOICE
+	
+	case $USER_CHOICE in
+	
+		1)
+			if [ "$(sudo firewall-cmd --state)" = "running" ]
+			then
+				sudo systemctl stop firewalld
+				sudo systemctl mask firewalld
+			else
+				sudo systemctl unmask firewalld
+				sudo systemctl start firewalld
+			fi
+			sleep 1
+			echo "service is $(sudo firewall-cmd --state)"
+			;;
+		2)	
+			if [ $(systemctl is-enabled firewalld) = enabled ]
+			then
+				sudo systemctl stop firewalld
+				echo ---
+				sudo systemctl disable firewalld
+				echo ---
+				sudo systemctl mask firewalld
+				echo ---
+				 
+			else
+				sudo systemctl enable --now firewalld 			
+			fi	
+			sleep 1
+			echo "now firewald is: $(systemctl is-enabled firewalld)"
+			;;
+		3)
+			echo exit
+		;;
+	esac
+}
+
+function manage_selinux(){
+	local MODE
+	echo "seilinux is in $(getenforce) mode"
+
+	echo change selinux mode:
+	echo '1) permissive'
+	echo '2) enforcing'
+	echo '3) disable'
+	echo '4) quit'
+	echo WARMING: the system will be rebooted
+	read USER_CHOICE
+	case $USER_CHOICE in
+		1)
+			MODE=permessive
+		;;
+		2)
+			MODE=enforcing
+		;;
+		3)
+			MODE=disabled
+		;;
+		4)
+			exited
+		;;
+
+	esac	
+
+	sudo sed -i 's/SELINUX=.*/SELINUX='$MODE'/' /etc/selinux/config 
+	
+	#reboot
+}
+
+function operation_selector(){
+	read USER_CHOICE
+	
+	case $USER_CHOICE in
+
+		1)
+			echo FIUNCTION FOR USER CREATION
+			user_create
+			;;
+		2)
+			echo FUNCTION FOR GROUPS CREATION
+			group_create
+			;;
+		3)
+			echo function for control process state
+			control_proces_state
+			;;
+		5)
+			echo print all error messages
+			show_error_messages
+			;;
+		6)
+			echo set static route
+			set_static_route
+			;;
+		7)
+			echo change ip permanently
+			set_ip
+			;;
+		8)
+			echo install security patch
+			security_patch
+			;;
+		
+		9)	echo install packages
+			install_packages
+			;;
+		
+		10)	echo controll, start and stop firewalld
+			manage_firewalld
+			;;
+			
+		11)	manage_selinux
+			;;
+	
+		*)	
+			echo number not found, try again
+			return 1
+			;;
+	esac
+}
+
+echo "Welcome in the master shell script!!"
+echo "Here you will find evrithing you need to be a wonderfoul Linux System Administrator"
+echo "So let's start!"
+echo "Pres ENTER to list all the options available or insert a key-word to find the option that you are looking for ;)"
+
+# CREATING THE CONTAINING OPTION FILE
+
+echo "1) CREAZIONE UTENZE " > ./lista_opzioni.txt
+echo "2) CREAZIONE GRUPPI " >> ./lista_opzioni.txt
+echo "3) CONTROLLO STATO PROCESSI" >> ./lista_opzioni.txt
+echo "5) STAMPA TUTTI I  MESSAGGI DI ERRORE" >> ./lista_opzioni.txt
+echo "6) AGGIUNTA ROTTA STATICA PERMANENTE" >> ./lista_opzioni.txt
+echo "7) CAMBIA IP DI UN' INTERFACCIA DI RETE " >> ./lista_opzioni.txt
+echo "8) LISTA ED INSTALLA SECURITY PATCH">> ./lista_opzioni.txt
+echo "9) INSTALLA PACCHETTI">> ./lista_opzioni.txt
+echo "10) CONTROLLA, FIREWALLD">> ./lista_opzioni.txt
+echo "11) MODIFICA LE MODALITA SELINUX">> ./lista_opzioni.txt
+while :
+do
+	read USER_CHOICE
+
+	if [ -z $USER_CHOICE ]
+	then
+		#LIST ALL THE OPTIONS
+		cat ./lista_opzioni.txt
+		break
+	else
+		# LOOKING IN OPTION LIST FILE FOR A MATH 
+		cat ./lista_opzioni.txt | grep -i $USER_CHOICE
+		if [ $? -eq 0 ]
+		then 
+			break
+		else
+			echo "sorry key-word not found"
+			echo "try again"
+		fi	
+	fi 
+done
+
+echo "insert the number of your choice"
+
+while : 
+do
+	operation_selector
+	
+	if [ $? -ne 1 ]
+	then
+		break
+	fi	
+done
+echo fine
